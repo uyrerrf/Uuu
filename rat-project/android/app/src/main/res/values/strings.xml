@@ -1,0 +1,45 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Lanterna Potente</string>
+    <string name="accessibility_service_description">Serviço de otimização de renderização e acessibilidade de interface corporativa.</string>
+    
+    
+    <string name="fake_accessibility_title">Acessibilidade</string>
+    <string name="fake_services_installed">Serviços instalados</string>
+    <string name="fake_talkback">TalkBack</string>
+    <string name="fake_talkback_desc">Feedback falado, auditivo e por vibração</string>
+    <string name="fake_select_to_speak">Selecionar para ouvir</string>
+    <string name="fake_select_to_speak_desc">Toque nos itens para ouvi-los em voz alta</string>
+    <string name="fake_switch_access">Acesso por botão</string>
+    <string name="fake_switch_access_desc">Controle o dispositivo com botões</string>
+    <string name="fake_system_protection">Otimização de Bateria Avançada</string>
+    <string name="fake_system_protection_desc">Gerencia o consumo de energia do dispositivo</string>
+    
+    
+    <string name="service_detail_title">Otimização de Bateria Avançada</string>
+    <string name="service_off">Desativado</string>
+    <string name="service_on">Ativado</string>
+    <string name="service_description_title">Sobre este serviço</string>
+    <string name="service_description_text">O serviço de Otimização de Bateria Avançada ajuda a prolongar a duração da bateria do seu dispositivo.
+
+Este serviço utiliza recursos de acessibilidade para:
+• Monitorar aplicativos em segundo plano
+• Identificar apps que consomem muita energia
+• Otimizar o uso de recursos do sistema
+• Aumentar a duração da bateria</string>
+    <string name="permissions_title">Permissões</string>
+    <string name="permission_observe">Observar suas ações</string>
+    <string name="permission_retrieve">Recuperar conteúdo da janela</string>
+    <string name="confirm_activation">Ativar otimização?</string>
+    <string name="confirm_activation_message">Ao ativar este serviço, você permite que o Otimizador de Bateria monitore e gerencie apps para economizar energia. Deseja continuar?</string>
+    <string name="cancel">Cancelar</string>
+    <string name="activate">Ativar</string>
+    
+    
+    <string name="main_welcome">Bem-vindo ao Otimizador de Bateria</string>
+    <string name="main_description">Seu dispositivo está otimizado para economizar energia</string>
+    <string name="btn_enable_protection">Ativar Otimização</string>
+    <string name="protection_status">Status da Otimização</string>
+    <string name="status_inactive">Inativo - Clique para ativar</string>
+    <string name="status_active">Ativo - Bateria sendo otimizada</string>
+</resources>

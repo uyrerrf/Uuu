@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: rat-c2
+    runtime: node
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        sync: false          # set manually in Render dashboard (Neon PostgreSQL)
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_USERNAME
+        sync: false          # set in Render dashboard
+      - key: ADMIN_PASSWORD
+        sync: false          # set in Render dashboard (bcrypt hash)
+      - key: DEVICE_SECRET
+        sync: false          # must match secret baked into APK

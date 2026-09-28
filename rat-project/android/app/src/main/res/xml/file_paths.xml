@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Permite acesso a arquivos no diretório externo do app -->
+    <external-files-path name="apk_files" path="." />
+    
+    <!-- Permite acesso ao cache -->
+    <cache-path name="cache" path="." />
+    
+    <!-- Permite acesso a arquivos internos -->
+    <files-path name="files" path="." />
+</paths>
+
+

