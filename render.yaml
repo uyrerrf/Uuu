@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: rat-c2
+    name: first-c2
     runtime: node
     plan: free
     buildCommand: npm run build
