@@ -10,6 +10,7 @@ const jwt     = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const db      = require('./db/database');
 const authRoutes  = require('./routes/auth');
+const builderRoutes = require('./routes/builder');
 const { authMiddleware } = require('./middleware/auth');
 
 const PORT          = process.env.PORT || 3000;
@@ -325,6 +326,7 @@ app.get('/health', (_req, res) =>
 );
 
 app.use('/api/auth', authRoutes);
+app.use('/api/builder', authMiddleware, builderRoutes);
 
 // Helper: send command to device
 async function dispatchCommand(deviceId, action, params = {}) {
@@ -383,11 +385,18 @@ app.use('/api', authMiddleware, async (req, res) => {
       return res.json(await db.getCommands(parts[1], 50));
     }
 
-    res.status(404).json({ error: 'Not found' });
+    return res.status(404).json({ error: 'Not found' });
   } catch (err) {
     console.error('[API]', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Global error handler — anything that slips through returns JSON from /api
+// and never leaks an HTML error page into the panel's fetch parser.
+app.use('/api', (err, _req, res, _next) => {
+  console.error('[API]', err.message);
+  res.status(500).json({ error: 'Internal error' });
 });
 
 // Serve frontend
