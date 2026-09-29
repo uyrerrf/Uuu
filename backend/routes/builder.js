@@ -1,4 +1,4 @@
-use strict';
+"use strict";
 // Dashboard APK builder — triggers the GitHub Actions workflow that
 // builds + signs + renames the APK, and reports run status back to the panel.
 //
