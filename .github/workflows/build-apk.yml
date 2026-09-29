@@ -195,7 +195,7 @@ jobs:
       - name: Verify APK signature
         working-directory: android
         run: |
-          set -euo pipefail
+          set -eo pipefail
           APK=$(find app/build/outputs -name "*.apk" | head -1)
           [ -n "$APK" ] || { echo "::error::No APK produced by gradle"; exit 1; }
           "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --print-certs "$APK" \
