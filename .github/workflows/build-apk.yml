@@ -42,8 +42,12 @@ on:
 env:
   CCS: android/app/src/main/java/com/seguranca/protecao/CommandControlService.java
 
+permissions:
+  contents: write
+
 jobs:
   build:
+
     name: Build & Sign APK
     runs-on: ubuntu-latest
 
