@@ -1,6 +1,5 @@
-"use strict";
+'use strict';
 const express = require('express');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const router = express.Router();
@@ -16,23 +15,14 @@ router.post('/login', async (req, res) => {
     }
 
     const adminUser = process.env.ADMIN_USERNAME;
-    // Accept both env names — render.yaml ships ADMIN_PASSWORD,
-    // older docs referenced ADMIN_PASSWORD_HASH. Either works.
-    const adminHash = process.env.ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD;
+    const adminPass = process.env.ADMIN_PASSWORD;
 
-    if (!adminUser || !adminHash) {
+    if (!adminUser || !adminPass) {
       console.error('[AUTH] ADMIN_USERNAME / ADMIN_PASSWORD not set in env');
       return res.status(500).json({ error: 'Server auth not configured' });
     }
 
-    if (username !== adminUser) {
-      // Timing-safe: still run bcrypt even on wrong username
-      await bcrypt.compare(password, '$2b$12$invalid.hash.for.timing.safety.only');
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const valid = await bcrypt.compare(password, adminHash);
-    if (!valid) {
+    if (username !== adminUser || password !== adminPass) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -73,3 +63,4 @@ router.post('/refresh', (req, res) => {
 });
 
 module.exports = router;
+    
