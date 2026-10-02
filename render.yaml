@@ -12,19 +12,19 @@ services:
       - key: PORT
         value: 10000
       - key: DATABASE_URL
-        sync: false          # set manually in Render dashboard (Neon PostgreSQL)
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: ADMIN_USERNAME
-        sync: false          # set in Render dashboard
+        sync: false
       - key: ADMIN_PASSWORD
-        sync: false          # set in Render dashboard (bcrypt hash)
+        sync: false
       - key: DEVICE_SECRET
-        sync: false          # must match secret baked into APK
+        sync: false
       - key: GH_TOKEN
-        sync: false          # GitHub PAT (actions:write) — powers the dashboard APK builder
+        sync: false
       - key: GH_REPO
-        sync: false          # owner/repo containing build-apk.yml
+        sync: false
       - key: PUBLIC_C2_URL
-        sync: false          # optional — prefills builder C2 field
+        sync: false
         
