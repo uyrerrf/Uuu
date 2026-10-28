@@ -93,30 +93,21 @@ function startKeepalive(wss, connMap, label) {
       const meta = connMap.get(ws);
       if (!meta) return;
 
-      const connAge   = now - (meta.connectedAt || now);
-      const timeSince = now - (meta.lastPong    || now);
-
-      // Grace period: never reap within the first 30 s of connection.
-      // Prevents false positives during slow device registration.
-      if (connAge < 30_000) {
-        try { ws.ping(); meta.lastPing = now; } catch { ws.terminate(); }
+      // Check for dead socket — missed too many pongs
+      if (now - meta.lastPing > PONG_TIMEOUT && meta.missedPongs >= MAX_MISSED_PONGS) {
+        console.log(`[${label}] Reaping dead socket (missed ${meta.missedPongs} pongs)`);
+        ws.terminate(); // Force close — triggers 'close' event
         return;
       }
 
-      // Reap only when both conditions hold: pong gap > PONG_TIMEOUT AND
-      // missed count >= MAX_MISSED_PONGS.  The double guard prevents a single
-      // delayed pong from triggering premature termination.
-      if (timeSince > PONG_TIMEOUT && meta.missedPongs >= MAX_MISSED_PONGS) {
-        console.log(`[${label}] Reaping dead socket (age=${Math.round(connAge/1000)}s, missed=${meta.missedPongs})`);
-        ws.terminate();
-        return;
+      // Count this ping as potentially missed if we haven't seen a pong
+      if (meta.missedPongs > 0 && now - meta.lastPong > PING_INTERVAL * 2) {
+        meta.missedPongs++;
+      } else {
+        meta.missedPongs = 0;
       }
 
-      // Increment missed count only after 2x ping interval without a pong
-      if (timeSince > PING_INTERVAL * 2) {
-        meta.missedPongs = (meta.missedPongs || 0) + 1;
-      }
-
+      // Send protocol ping
       try {
         ws.ping();
         meta.lastPing = now;
@@ -126,28 +117,20 @@ function startKeepalive(wss, connMap, label) {
     });
   }, PING_INTERVAL);
 
-  timer.unref();
+  timer.unref(); // Don't keep process alive just for pings
   return timer;
 }
 
 // Track pongs on both namespaces
 deviceWss.on('pong', (ws) => {
-  const now = Date.now();
-  // Reset deviceMap entry (device-level tracking)
+  const meta = panelConns.get(ws); // check panel first (same ws object won't be in both, but be safe)
+  // Find which map has this ws
   for (const [id, entry] of deviceMap) {
     if (entry.ws === ws) {
       entry.missedPongs = 0;
-      entry.lastPong    = now;
-      break;
+      entry.lastPong = Date.now();
+      return;
     }
-  }
-  // CRITICAL FIX: also reset panelConns meta — this is what startKeepalive() checks.
-  // Without this, panelConns[ws].missedPongs keeps incrementing and every device
-  // gets reaped after ~60 s regardless of whether it's alive.
-  const meta = panelConns.get(ws);
-  if (meta) {
-    meta.missedPongs = 0;
-    meta.lastPong    = now;
   }
 });
 
@@ -175,7 +158,7 @@ deviceWss.on('connection', (ws, req) => {
   let registered = false;
 
   // Track connection metadata for keepalive
-  const connMeta = { lastPing: Date.now(), lastPong: Date.now(), missedPongs: 0, connectedAt: Date.now() };
+  const connMeta = { lastPing: Date.now(), lastPong: Date.now(), missedPongs: 0 };
   panelConns.set(ws, connMeta); // reuse panelConns map for keepalive tracking
 
   // Auth timeout — close if no DEVICE_INFO within 15s
